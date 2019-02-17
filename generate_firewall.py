@@ -10,13 +10,6 @@ from pprint import pprint
 execfile('config.inc.py')
 
 
-def is_systemd():
-  import os.path
-  if os.path.isfile("/etc/systemd"):
-    return True
-  else:
-    return False
-
 def ipset_find_set_info(set):
   '''
   Return information about the set
