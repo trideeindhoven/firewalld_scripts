@@ -25,13 +25,15 @@ links = ["https://www.badips.com/get/list/ssh/1","https://www.badips.com/get/lis
 
 sql = []
 for link in links:
+  new_list = []
   r = requests.get(link)
 
   csv_reader = csv.reader(r.text.splitlines(), delimiter=',')
   for row in csv_reader:
-    if row[0] not in sql and row[0][0] != "#":
-      sql.append(row[0])
-
+    if len(row):
+      new_list.append(row[0])
+  sql = sql + list( set(new_list) - set(sql) )
+  print len(sql)
 
 cursor.execute("DELETE FROM `badips`")
 con.commit()
@@ -42,7 +44,6 @@ for i in range(len(sql)):
   if i%500 == 0:
     con.commit()
 con.commit()
-
 
 
 

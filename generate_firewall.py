@@ -164,35 +164,6 @@ for rule in data['blacklist']:
       firewall_add_rule({"position":"insert","chain":"BLACKLIST","protocol": "udp", "set":"geoip_"+country, "port":rule['parameters']['ports'],"action":"DROP"})
 
 
-setinfo = ipset_find_set_info('blocklist')
-if not setinfo:
-  #print "Create ipset blocklist"
-  ipset_create("blocklist","hash:net",16000,65536)
-else:
-  #print "Flush old blocklist"
-  ipset_flush("blocklist")
-#print "Generate ipset blocklist"
-
-str_list=[]
-with con:
-  cur.execute("SELECT ip FROM blocklist")
-  for i in range(cur.rowcount):
-    row = cur.fetchone()
-    str_list.append("add blocklist %s\n" %(row[0]))
-    #ipsetrules+="add blocklist "+row[0]+"\n"
-ipsetrules+=''.join(str_list)
-
-
-firewall_add_rule({"position":"insert","chain":"BLACKLIST","set":"blocklist", "action":"DROP"})
-con.close()
-
-ipset_restore(ipsetrules)
-ipsetrules=""
-
-
-
-
-
 setinfo = ipset_find_set_info('badips')
 if not setinfo:
   #print "Create ipset badips"
