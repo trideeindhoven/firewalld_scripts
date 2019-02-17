@@ -190,7 +190,6 @@ ipsetrules=''.join(str_list)
 ipset_restore(ipsetrules)
 
 firewall_add_rule({"position":"insert","chain":"BLACKLIST","set":"badips", "action":"DROP"})
-con.close()
 ipsetrules=""
 str_list=[]
 
