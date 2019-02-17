@@ -21,7 +21,7 @@ con = mdb.connect(host=sql['host'], user=sql['user'], passwd=sql['password'], db
 cursor = con.cursor(mdb.cursors.DictCursor)
 
 import requests
-links = ["https://www.badips.com/get/list/ssh/1","https://www.badips.com/get/list/voip/1","https://www.badips.com/get/list/bruteforce/1","http://lists.blocklist.de/lists/all.txt"]
+links = ["https://www.badips.com/get/list/ssh/1","https://www.badips.com/get/list/voip/1","https://www.badips.com/get/list/bruteforce/1","http://lists.blocklist.de/lists/all.txt","http://www.voipbl.org/update/"]
 
 sql = []
 for link in links:
@@ -29,7 +29,7 @@ for link in links:
 
   csv_reader = csv.reader(r.text.splitlines(), delimiter=',')
   for row in csv_reader:
-    if row[0] not in sql:
+    if row[0] not in sql and row[0][0] != "#":
       sql.append(row[0])
 
 
