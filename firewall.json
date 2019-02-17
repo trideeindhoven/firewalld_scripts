@@ -1,0 +1,17 @@
+{
+  "whitelist": [
+    {
+      "module": "multiport",
+      "parameters": {"ports":"80,443",
+                     "geoip":["NL","DE","BE"]}
+    }
+  ],
+  "blacklist": [
+    {
+      "module": "multiport",
+      "parameters": {"ports":"22",
+                     "geoip":["KR","CN","RU"]}
+    }
+  ]
+}
+
