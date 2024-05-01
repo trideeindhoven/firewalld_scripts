@@ -1,30 +1,78 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import json
-import MySQLdb as mdb
-import netaddr
+import csv
 import subprocess
+import requests
+#import tarfile
+import io
+import os
+import sys
+from zipfile import ZipFile
+import netaddr
 from pprint import pprint
 
-execfile('config.inc.py')
+maxMindLicenseKey = 'etGRN5sJYW7LZsLx'
+url = 'https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=%s&suffix=zip'%(maxMindLicenseKey)
+locations_file='GeoLite2-Country-Locations-en.csv'
+database_file ='GeoLite2-Country-Blocks-IPv4.csv'
+ipsetcommand='/usr/sbin/ipset'
+sudocommand='/usr/bin/sudo'
+firewallcmdcommand='/usr/bin/firewall-cmd'
+geochain='GEOIP'
+ipsetwhitelist='ipwhitelist'
+ipsetblacklist='ipblacklist'
 
+print(url)
+r = requests.get(url, allow_redirects=True, stream=True)
+with ZipFile(io.BytesIO(r.raw.read()), 'r') as zipObj:
+   listOfFileNames = zipObj.namelist()
+   for fileName in listOfFileNames:
+      if fileName.endswith('GeoLite2-Country-Blocks-IPv4.csv'):
+          print(fileName)
+          #zipObj.extract(fileName, '/tmp/geoip.csv')
+          with zipObj.open(fileName) as source:
+            with open(os.path.join('/tmp', 'GeoLite2-Country-Blocks-IPv4.csv'), "w") as target:
+              for line in source:
+                target.write(line.decode())
+      if fileName.endswith('GeoLite2-Country-Locations-en.csv'):
+          print(fileName)
+          #zipObj.extract(fileName, '/tmp/geoip.csv')
+          with zipObj.open(fileName) as source:
+            with open(os.path.join('/tmp', 'GeoLite2-Country-Locations-en.csv'), "w") as target:
+              for line in source:
+                target.write(line.decode())
+
+
+whitelistcountries=['CY', 'GR', 'EE', 'LV', 'SJ', 'MD', 'FI', 'AX', 'MK', 'HU', 'BG', 'PL', 'RO', 'XK', 'PT', 'GI', 'ES', 'MT', 'FO', 'DK', 'IS', 'GB', 'CH', 'SE', 'NL', 'AT', 'BE', 'DE', 'LU', 'IE', 'MC', 'FR', 'AD', 'LI', 'JE', 'IM', 'GG', 'SK', 'CZ', 'NO', 'VA', 'SM', 'IT', 'SI', 'ME', 'HR', 'BA', 'RS', #EU - Baltics
+'US', 'CA']
+whitelistcountries=['NL', 'BE', 'CH', 'PK']
+
+def ipset_create(name,type,size,maxelem):
+  subprocess.call([sudocommand, '-S', '-n',  ipsetcommand, "create",name,type,"hashsize",str(size),"maxelem",str(maxelem)])
+
+def ipset_flush(name):
+  subprocess.call([sudocommand, '-S', '-n', ipsetcommand, "-F",name])
+
+def ipset_add_item(cidr,set):
+  subprocess.call([sudocommand, '-S', '-n', ipsetcommand, "add",set,cidr])
 
 def ipset_find_set_info(set):
   '''
   Return information about the set
   '''
 
-  cmd = '{0} list -t {1}'.format(ipsetcommand, set)
+  cmd = '{0} -S -n {1} list -t {2}'.format(sudocommand, ipsetcommand, set)
   p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
   (output, err) = p.communicate()
+  #print(output)
 
   if err:
     # Set doesn't exist return false
     return False
 
   setinfo = {}
-  _tmp = output.split('\n')
+  _tmp = str(output).split('\n')
   for item in _tmp:
     # Only split if item has a colon
     if ':' in item:
@@ -33,186 +81,80 @@ def ipset_find_set_info(set):
     return setinfo
   return false
 
-def ipset_create(name,type,size,maxelem):
-
-  subprocess.call([ipsetcommand, "create",name,type,"hashsize",str(size),"maxelem",str(maxelem)])
-
-def ipset_flush(name):
-  subprocess.call([ipsetcommand, "-F",name])
-
-def ipset_add_item(cidr,set):
-  subprocess.call([ipsetcommand, "add",set,cidr])
+setinfo = ipset_find_set_info(ipsetblacklist)
+if not setinfo:
+  ipset_create(ipsetblacklist,"hash:net",16000,500000)
+else:
+  ipset_flush(ipsetblacklist)
 
 def ipset_restore(rules):
-  p = subprocess.Popen([ipsetcommand, 'restore', '-exist'], stdout=subprocess.PIPE, stdin=subprocess.PIPE)
-  stdout = p.communicate(input=rules)[0]
+  cmd = '{0} -S -n {1}'.format(sudocommand, ipsetcommand)
+  p = subprocess.Popen([sudocommand, '-S', '-n', ipsetcommand, 'restore', '-exist'], stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+  stdout = p.communicate(input=rules.encode('UTF8'))[0]
 
 
-def firewall_add_rule(input):
-  print "firewall_add_rule"
-  #system(.' --direct --add-rule ipv4 filter GEOIP 0 -m set --match-set geoip_'..' src -j LOG --log-prefix "firewall - '..' Country Drop "');
-  action=[firewallcommand,"--direct","--add-rule","ipv4","filter",input['chain']]
+locations={}
+with open(os.path.join('/tmp', locations_file) ) as csvfile:
+  readCSV = csv.reader(csvfile, delimiter=',')
+  for row in readCSV:
+    if row[0] == 'geoname_id' or row[4] == '':
+      continue
+    locations[row[0]] = row[4].upper()
 
-  if input['position'] == "insert":
-    action.append("0")
-  else:
-    action.append("1")
+for country in whitelistcountries:
+    ipList=[]
+    with open(os.path.join('/tmp', database_file) ) as csvfile:
+      readCSV = csv.reader(csvfile, delimiter=',')
+      for row in readCSV:
+          if row[0] == 'network':
+              continue
+          if row[1] in locations:
+              if locations[row[1]] == country:
+                  ipList.append(netaddr.IPNetwork(row[0]) )
 
-  if 'set' in input:
-    action.append("-m")
-    action.append("set")
-    action.append("--match-set")
-    action.append(str(input['set']))
-    action.append("src")
+    str_list=[]
+    for net in netaddr.cidr_merge(ipList):
+        str_list.append("add geoip_%s %s\n"%(country, net) )
 
-  if 'multiport' in input:
-    action.append("-m")
-    action.append("multiport")
-    action.append("-p")
-    action.append("tcp")
-    action.append("--dports")
-    action.append(str(input['multiport']))
+    setinfo = ipset_find_set_info('geoip_%s'%(country) )
+    if not setinfo:
+      ipset_create('geoip_%s'%(country),"hash:net",16000,500000)
+    else:
+      ipset_flush('geoip_%s'%(country))
+    ipsetrules=''.join(str_list)
+    ipset_restore(ipsetrules)
 
-  if 'port' in input:
-    action.append("-m")
-    action.append(input['protocol'])
-    action.append("-p")
-    action.append(input['protocol'])
-    action.append("--dport")
-    action.append(str(input['port']))
+##iptablescommand -I geochain -m set --match-set <ipmset> src -j <blocktype>
+#subprocess.call([sudocommand, iptablescommand, "-t", "raw", "-F","IPSETS"])
+#subprocess.call([sudocommand, iptablescommand, "-t", "filter", "-F","IPSETS"])
+#subprocess.call([sudocommand, iptablescommand, "-t", "raw", "-I","IPSETS", "-m", "set", "--match-set", ipsetblacklist, "src", "-j", "DROP"])
+#subprocess.call([sudocommand, iptablescommand, "-t", "filter", "-A","IPSETS", "-m", "set", "--match-set", ipsetwhitelist, "src", "-j", "ACCEPT"])
+#subprocess.call([sudocommand, iptablescommand, "-t", "raw", "-A","IPSETS", "-j", "RETURN"])
+#subprocess.call([sudocommand, iptablescommand, "-t", "filter", "-A","IPSETS", "-j", "RETURN"])
 
-  action.append("-j")
-  action.append(input['action'])
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-chain", "ipv4", "raw", "IPSETS"])
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--remove-rules", "ipv4", "raw", "IPSETS"])
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-rule", "ipv4", "raw", "PREROUTING", "0", "-j", "IPSETS"])
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-rule", "ipv4", "raw", "IPSETS", "0", "-m", "set", "--match-set", "ipblacklist", "src", "-j", "DROP"])
+#subprocess.call([sudocommand, firewallcmdcommand, "--direct", "--add-rule", "ipv4", "raw", "IPSETS", "0", "-m", "set", "--match-set", "ipwhitelist", "src", "-j", "ACCEPT"])
 
-  print action
-  subprocess.call(action)
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-chain", "ipv4", "filter", "IPSETS"])
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--remove-rules", "ipv4", "filter", "IPSETS"])
+for c in whitelistcountries:
+  subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-rule", "ipv4", "filter", "IPSETS", "0", "-p", "udp", "-m", "set", "--match-set", "geoip_%s"%(c), "src", "-m", "multiport", "--dports", "5080,9000:10999", "-j", "ACCEPT"])
+  subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-rule", "ipv4", "filter", "IPSETS", "0", "-p", "tcp", "-m", "set", "--match-set", "geoip_%s"%(c), "src", "-m", "multiport", "--dports", "80,443,5080", "-j", "ACCEPT"])
 
+subprocess.call([sudocommand, '-S', '-n', firewallcmdcommand, "--direct", "--add-rule", "ipv4", "filter", "INPUT_direct", "0", "-j", "IPSETS"])
 
- 
-def firewall_flush_chain(chain):
-  subprocess.call([firewallcommand, "--direct","--remove-rules","ipv4","filter",chain])
-  #system(.' --direct --remove-rules ipv4 filter GEOIP');
-
-
-with open('/root/bin/firewall.json') as data_file:   
-    data = json.load(data_file)
-pprint(data)
-
-con = mdb.connect(host=sql['host'], user=sql['user'], passwd=sql['password'], db=sql['db'], charset='utf8');
-cur = con.cursor()
-
-print "Generate ipsets"
-countries=[]
-for rule in data['whitelist']:
-  for country in rule['parameters']['geoip']:
-    if country not in countries:
-      countries.append(country)
-for rule in data['blacklist']:
-  for country in rule['parameters']['geoip']:
-    if country not in countries:
-      countries.append(country)
-
-ipsetrules=""
+r = requests.get('http://www.voipbl.org/update/')
 str_list=[]
+for ip in r.text.split("\n"):
+  if ip.startswith('# TOTAL'):
+    continue
 
-for country in countries:
-  print country
-  setinfo = ipset_find_set_info('geoip_'+country)
-  if not setinfo:
-    #print "Create ipset geoip_"+country
-    ipset_create("geoip_"+country,"hash:net",16000,65536)
-  else:
-    #print "Flush old geoip_"+country
-    ipset_flush("geoip_"+country)
-  #print "Generate ipset geoip_"+country
-  #with con:
-
-  cur.execute("SELECT `network` FROM `GeoLite2-Country-Locations-en`,`GeoLite2-Country-Blocks-IPv4` where `GeoLite2-Country-Locations-en`.`country_iso_code`=\""+country+'" AND `GeoLite2-Country-Locations-en`.`geoname_id`=`GeoLite2-Country-Blocks-IPv4`.`registered_country_geoname_id`')
-  #ci = cur.fetchone()[0]
-
-  #cur.execute("SELECT start, end FROM ip where ci="+str(ci) )
-  for i in range(cur.rowcount):
-    row = cur.fetchone()
-    #print str(netaddr.IPAddress(row[0]))+" - "+str(netaddr.IPAddress(row[1]))
-    #for cidr in netaddr.IPRange(row[0],row[1]).cidrs():
-    #  #print str(cidr)
-    str_list.append("add geoip_%s %s\n"%(country, row[0]) )
-    #  #ipset_add_item(str(cidr),"geoip_"+country)
-
-ipsetrules+=''.join(str_list)
-ipset_restore(ipsetrules)
-ipsetrules=""
-
-
-
-firewall_flush_chain("WHITELIST")
-firewall_flush_chain("BLACKLIST")
-for rule in data['whitelist']:
-  if rule['module'] == 'multiport':
-    for country in rule['parameters']['geoip']:
-      firewall_add_rule({"position":"insert","chain":"WHITELIST","protocol": "tcp", "set":"geoip_"+country, "multiport":rule['parameters']['ports'],"action":"ACCEPT"})
-  if rule['module'] == 'udp':
-    for country in rule['parameters']['geoip']:
-      firewall_add_rule({"position":"insert","chain":"WHITELIST","protocol": "udp", "set":"geoip_"+country, "port":rule['parameters']['ports'],"action":"ACCEPT"})
-
-for rule in data['blacklist']:
-  if rule['module'] == 'multiport':
-    for country in rule['parameters']['geoip']:
-      firewall_add_rule({"position":"insert","chain":"BLACKLIST","protocol": "tcp", "set":"geoip_"+country, "multiport":rule['parameters']['ports'],"action":"DROP"})
-  if rule['module'] == 'udp':
-    for country in rule['parameters']['geoip']:
-      firewall_add_rule({"position":"insert","chain":"BLACKLIST","protocol": "udp", "set":"geoip_"+country, "port":rule['parameters']['ports'],"action":"DROP"})
-
-
-setinfo = ipset_find_set_info('badips')
-if not setinfo:
-  #print "Create ipset badips"
-  ipset_create("badips","hash:ip",16000,500000)
-else:
-  #print "Flush old badips"
-  ipset_flush("badips")
-#print "Generate ipset badips"
-str_list=[]
-with con:
-  cur.execute("SELECT ip FROM badips")
-  for i in range(cur.rowcount):
-    #print str(i)+" - "+str(cur.rowcount)
-    row = cur.fetchone()
-    str_list.append("add badips %s\n"%(row[0]))
-    #ipsetrules+="add badips "+row[0]+"\n"
-    if i % 10000 == 0:
-      ipsetrules=''.join(str_list)
-      ipset_restore(ipsetrules)
-      ipsetrules=""
-      str_list=[]
+  if ip != '':
+    str_list.append("add %s %s\n"%(ipsetblacklist, ip) )
 
 ipsetrules=''.join(str_list)
 ipset_restore(ipsetrules)
-
-firewall_add_rule({"position":"insert","chain":"BLACKLIST","set":"badips", "action":"DROP"})
-ipsetrules=""
-str_list=[]
-
-
-
-
-
-
-setinfo = ipset_find_set_info('letsencrypt')
-if not setinfo:
-  ipset_create("letsencrypt","hash:ip",1024,65536)
-else:
-  ipset_flush("letsencrypt")
-str_list=[]
-with con:
-  cur.execute("SELECT ip FROM letsencrypt")
-  for i in range(cur.rowcount):
-    row = cur.fetchone()
-    str_list.append("add letsencrypt %s\n"%(row[0]))
-
-ipsetrules=''.join(str_list)
-ipset_restore(ipsetrules)
-firewall_add_rule({"position":"insert","chain":"WHITELIST","protocol": "tcp", "set":"letsencrypt", "multiport":"80,443","action":"ACCEPT"})
-
-con.close()
-
+#print(ipsetrules)
